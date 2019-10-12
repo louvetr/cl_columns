@@ -11,15 +11,20 @@
 #include <curses.h>
 #include <wctype.h>
 
+
 /////////////////////////////////////////////////////////////////////
 // defines
 /////////////////////////////////////////////////////////////////////
 
-#define DELAY 50000
+#define GTICK 50000
 
 // playground size
 #define pg_max_x 8
 #define pg_max_y 14
+
+// min terminal size
+#define term_max_x 80
+#define term_max_y 30
 
 // charaters
 #define c_border '#'
@@ -41,31 +46,36 @@
 #define control_3 "s: faster fall"
 #define control_4 "o:        quit"
 
+
 /////////////////////////////////////////////////////////////////////
 // global variables
 /////////////////////////////////////////////////////////////////////
 
-const wchar_t pieces[] = { L'\x2338', L'\x2339', L'\x233A', L'\x2395',
-			   L'\x2341', L'\x2588', L'\x2591' };
+// http://www.unicode.org/charts/PDF/U2300.pdf
+const wchar_t pieces[] = { L'\x2338' /*, L'\x2339'*/,
+			   L'\x233A',
+			   L'\x2395',
+			   L'\x2341',
+			   L'\x2588',
+			   L'\x2591' };
 wchar_t trio[3] = { 0 };
 wchar_t trio_next[3] = { 0 };
 static int max_x, max_y;
-static int score;
+static int score = 0, nb_pieces_erased = 0;
 static wchar_t *screen = NULL;
+
 
 /////////////////////////////////////////////////////////////////////
 // static functions
 /////////////////////////////////////////////////////////////////////
 
-// set an 1 line box
+// set an message box bordered by 'box-drawing' unicode characters
 static int set_msg_box(int x, int y, int x_size, int y_size, char *title,
 		       wchar_t **msg_pp, int msg_line)
 {
 	int i, j, msg_len;
 	int title_len = strlen(title);
 	wchar_t *msg;
-	/*wchar_t *msg = (wchar_t *)msg_pp;
-	int msg_len = wcslen((wchar_t *)msg);*/
 
 	// corners
 	screen[x + y * max_x] = L'\x2554';
@@ -95,10 +105,6 @@ static int set_msg_box(int x, int y, int x_size, int y_size, char *title,
 			if (i >= x_size + 1 - msg_len && i < x_size + 1)
 				screen[x + i - 1 + (y + 1 + j) * max_x] =
 					msg[i - (x_size + 1 - msg_len)];
-			/*((wchar_t *)msg_pp[j])[i - (x_size + 1 -
-								    msg_len)];*/
-			/*else
-				screen[x + i + (y + 1 + j) * max_x] = c_empty;*/
 		}
 	}
 
@@ -170,7 +176,8 @@ static inline int rnd_in_range(int min, int max)
 static void rnd_trio(wchar_t *in_trio)
 {
 	for (int k = 0; k < 3; k++) {
-		in_trio[k] = pieces[rnd_in_range(0, 6)];
+		in_trio[k] = pieces[rnd_in_range(
+			0, sizeof(pieces) / sizeof(pieces[0]) - 1)];
 	}
 }
 
@@ -190,11 +197,33 @@ static void clear_trio_in_pg(wchar_t *pg, int trio_x, int trio_y)
 		pg[trio_x + (trio_y - k) * pg_max_x] = c_empty;
 }
 
+// count the number of pieces missing from a pg to another
+static int get_nb_pieces_diff(wchar_t *pg1, wchar_t *pg2)
+{
+	int i, j, diff, cpt1 = 0, cpt2 = 0;
+
+	for (j = 0; j < pg_max_y; j++) {
+		for (i = 0; i < pg_max_x; i++) {
+			int k = i + j * pg_max_x;
+			if (pg1[k] != c_empty && pg1[k] != c_border)
+				cpt1++;
+			if (pg2[k] != c_empty && pg2[k] != c_border)
+				cpt2++;
+		}
+	}
+	diff = cpt1 - cpt2;
+	if (diff < 0)
+		diff = -diff;
+
+	return diff;
+}
+
 // all pieces goes down if they are above a empty slot
 static int apply_gravity(wchar_t *pg_in, wchar_t *pg_out)
 {
 	int x, y, cpt;
 
+	// init an empty pg screen
 	for (x = 1; x < pg_max_x - 1; x++) {
 		for (y = 0; y < pg_max_y - 1; y++) {
 			pg_out[x + y * pg_max_x] = c_empty;
@@ -203,6 +232,7 @@ static int apply_gravity(wchar_t *pg_in, wchar_t *pg_out)
 
 	for (x = 1; x < pg_max_x - 1; x++) {
 		cpt = 0;
+		// remove the empty slots of each columns and make fall the pieces
 		for (y = pg_max_y - 2; y > 1; y--) {
 			if (pg_in[x + y * pg_max_x] != c_empty) {
 				pg_out[x + (pg_max_y - 2 - cpt) * pg_max_x] =
@@ -293,6 +323,8 @@ static int check_combo(wchar_t *pg)
 		}
 	}
 
+	nb_pieces_erased += get_nb_pieces_diff(pg, pg_copy);
+
 	// if combo happened, pieces have to fall
 	if (tmp_score > 0) {
 		// blink pieces to delete
@@ -311,15 +343,19 @@ static int check_combo(wchar_t *pg)
 	return tmp_score;
 }
 
+
 /////////////////////////////////////////////////////////////////////
 // main function
 /////////////////////////////////////////////////////////////////////
 
 int main()
 {
-	int i, j, exit = 0, fast_fall = 0;
+	int i, j, game_is_over = 0, exit = 0, fast_fall = 0;
 	char coef_s[18];
 	wchar_t wstr[32];
+	wchar_t *next_wc[3];
+
+	int redraw, clock = 0, game_cycle = 700000;
 
 	// screen info
 	int screen_size, pg_size;
@@ -340,15 +376,11 @@ int main()
 	cbreak(); // Make input characters immediately available to the program
 	getmaxyx(stdscr, max_y, max_x);
 
-	if (max_x < pg_max_x || max_y < pg_max_y) {
-		printf("max_x = %d, max_y = %d", max_x, max_y);
-		printf("ERROR: window size as to be at least 40x40.\n");
-		goto exit;
+	if (max_x < term_max_x || max_y < term_max_y) {
+		printf("max_x = %d, max_y = %d\n", max_x, max_y);
+		printf("ERROR: terminal size as to be at least 80x30.\n");
+		return -1;
 	}
-
-	// pg_offset is where to display playground in screen
-	/*pg_offset =
-		max_x / 2 - pg_max_x / 2 + (max_y / 2 - pg_max_y / 2) * max_x;*/
 
 	// allocate screen
 	screen_size = max_x * max_y + 1;
@@ -383,46 +415,61 @@ int main()
 
 	// game loop
 	while (!exit) {
+		redraw = 0;
+		fast_fall = 0;
 		clear();
 
+		// a new trio enter the screen
+		//   -Copy it from spoiler
+		//   -Generate a new spoiler trio
 		if (trio[0] == 0) {
 			memcpy(trio, trio_next, sizeof(trio_next));
 			rnd_trio(trio_next);
+			// initial position of trio
 			trio_x = 4;
 			trio_y = 1;
-			//fast_fall = 0;
+			//lose condition
+			if (pg[4 + 2 * pg_max_x] != c_empty)
+				game_is_over = 1;
 		}
-
-		// game timing =================================
-		usleep(100000);
-		/*if (fast_fall == 0)
-			usleep(400000);*/
 
 		// input =======================================
 		int key = getch();
 		switch (key) {
-		// TODO: lateral collision
-
 		case 'q': // left
 			if (pg[trio_x - 1 + trio_y * pg_max_x] == c_empty &&
 			    pg[trio_x - 1 + (trio_y + 1) * pg_max_x] ==
 				    c_empty) {
+				for (int k = 0; k < 3; k++)
+					pg[trio_x - 1 + (trio_y - k) * pg_max_x] =
+						pg[trio_x +
+						   (trio_y - k) * pg_max_x];
+
 				clear_trio_in_pg(pg, trio_x, trio_y);
 				trio_x--;
+
+				redraw = 1;
 			}
 			break;
 		case 'd': // right
 			if (pg[trio_x + 1 + trio_y * pg_max_x] == c_empty &&
 			    pg[trio_x + 1 + (trio_y + 1) * pg_max_x] ==
 				    c_empty) {
+				for (int k = 0; k < 3; k++)
+					pg[trio_x + 1 + (trio_y - k) * pg_max_x] =
+						pg[trio_x +
+						   (trio_y - k) * pg_max_x];
+
 				clear_trio_in_pg(pg, trio_x, trio_y);
 				trio_x++;
+				redraw = 1;
 			}
 			break;
 		case 's': // down
 			if (pg[trio_x + (trio_y + 1) * pg_max_x] == c_empty) {
 				fast_fall = 1;
 				mvaddstr(1, 1, "fast_fall set to 1");
+				redraw = 1;
 			}
 			break;
 		case 'z': // up
@@ -435,36 +482,41 @@ int main()
 			break;
 		}
 
-		// check trio collision
-		if (pg[trio_x + (trio_y + 1) * pg_max_x] == c_empty) {
-			pg[trio_x + (trio_y + 1) * pg_max_x] = trio[2];
-			pg[trio_x + (trio_y)*pg_max_x] = trio[1];
-			pg[trio_x + (trio_y - 1) * pg_max_x] = trio[0];
-			pg[trio_x + (trio_y - 2) * pg_max_x] = c_empty;
-			trio_y++;
-		} else {
-			int tmp_score = 0, coeff_score = 1;
-			do {
-				tmp_score = check_combo(pg);
-				score += tmp_score * coeff_score;
-				if (coeff_score > 1) {
-					snprintf(coef_s, 32, "COMBO X %d",
-						 coeff_score);
-					/*for (i = 0; i < strlen(coef_s); i++)
+		clock += GTICK;
+
+		if (clock >= game_cycle || fast_fall) {
+			clock = 0;
+
+			// check trio collision
+			if (pg[trio_x + (trio_y + 1) * pg_max_x] == c_empty) {
+				pg[trio_x + (trio_y + 1) * pg_max_x] = trio[2];
+				pg[trio_x + (trio_y)*pg_max_x] = trio[1];
+				pg[trio_x + (trio_y - 1) * pg_max_x] = trio[0];
+				pg[trio_x + (trio_y - 2) * pg_max_x] = c_empty;
+				trio_y++;
+			} else {
+				int tmp_score = 0, coeff_score = 1;
+				do {
+					tmp_score = check_combo(pg);
+					score += tmp_score * coeff_score;
+					if (coeff_score > 1) {
+						snprintf(coef_s, 32,
+							 "COMBO X %d",
+							 coeff_score);
+						/*for (i = 0; i < strlen(coef_s); i++)
 						screen[i] = coef_s[i];*/
-					mvaddstr(3, 0, coef_s);
-					refresh();
-				}
-				coeff_score++;
-			} while (tmp_score > 0);
-			/*for (i = 0; i < strlen(score_s); i++)
-				screen[i] = c_filler;*/
-			trio[0] = 0;
-			fast_fall = 0;
+						mvaddstr(3, 0, coef_s);
+						refresh();
+					}
+					coeff_score++;
+				} while (tmp_score > 0);
+				trio[0] = 0;
+				fast_fall = 0;
+			}
 		}
 
-		//lose condition
-		if (trio_y - 2 < 0) {
+		// change backgrount
+		if (game_is_over) {
 			for (j = 0; j < max_y; j++) {
 				for (i = 0; i < max_x; i++)
 					screen[i + j * max_x] = c_exclam;
@@ -472,37 +524,44 @@ int main()
 		}
 
 		// next trio spoiler
-		wchar_t *next_wc[3];
 		for (i = 0; i < 3; i++) {
 			next_wc[i] = calloc(sizeof(wchar_t), 2);
 			next_wc[i][0] = trio_next[2 - i];
 		}
-		set_msg_box(max_x / 5, max_y * 2 / 5, 6, 3, "Next:", next_wc,
+		set_msg_box(max_x * 2 / 7, max_y * 2 / 5, 6, 3, "Next:", next_wc,
 			    3);
+		// TODO: beware of the free
+		for (i = 0; i < 3; i++) {
+			free(next_wc[i]);
+		}
 
 		// display control
 		display_controls(max_x / 4 - control_len / 2, max_y * 2 / 3);
 
 		// put playground into screen
 		put_pg_into_screen(pg, screen, max_x / 2 - pg_max_x / 2,
-				   max_y * 1 / 2);
+				   max_y * 3 / 7);
 
 		// game title
-		display_title(max_x / 2 - header_len / 2, max_y / 4);
+		display_title(max_x / 2 - header_len / 2, max_y / 8);
 
 		swprintf(wstr, 20, L"%d pts", score);
-		set_msg_box(max_x * 2 / 3, max_y * 2 / 5, 16, 1,
+		set_msg_box(max_x * 2 / 3, max_y * 2 / 6, 16, 1,
 			    "Score:", (wchar_t **)&wstr, 1);
-				
+
 		swprintf(wstr, 20, L"%s", "TODO");
-		set_msg_box(max_x * 2 / 3, max_y * 3 / 5, 16, 1,
+		set_msg_box(max_x * 2 / 3, max_y * 3 / 6, 16, 1,
 			    "Info:", (wchar_t **)&wstr, 1);
 
 		swprintf(wstr, 20, L"%d", 1);
-		set_msg_box(max_x * 2 / 3, max_y * 4 / 5, 16, 1,
+		set_msg_box(max_x * 2 / 3, max_y * 4 / 6, 16, 1,
 			    "Level:", (wchar_t **)&wstr, 1);
 
-		if (trio_y - 2 < 0) {
+		swprintf(wstr, 20, L"%d", nb_pieces_erased);
+		set_msg_box(max_x * 2 / 3, max_y * 5 / 6, 16, 1,
+			    "Pieces:", (wchar_t **)&wstr, 1);
+
+		if (game_is_over) {
 			swprintf(wstr, 20, L"%s", "GAME OVER");
 			set_msg_box(max_x / 2 - 6, max_y / 2, 11, 1, "",
 				    (wchar_t **)&wstr, 1);
@@ -511,15 +570,11 @@ int main()
 		// print the screen
 		mvaddwstr(0, 0, screen);
 		refresh();
-		if (fast_fall == 0)
-			usleep(400000);
 
-		for (i = 0; i < 3; i++) {
-			free(next_wc[i]);
-		}
+		if (!redraw || !fast_fall)
+			usleep(GTICK);
 	}
 
-exit:
 	endwin();
 	free(screen);
 	free(pg);
