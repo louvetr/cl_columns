@@ -11,12 +11,16 @@
 #include <curses.h>
 #include <wctype.h>
 
-
 /////////////////////////////////////////////////////////////////////
 // defines
 /////////////////////////////////////////////////////////////////////
 
-#define GTICK 50000
+// game info
+#define GTICK 50000 // time (in usec) the game info is refreshed
+#define PIECES_LEVEL_TRESHOLD                                                  \
+	20 // increment level everytime this nb of pieces is cleared
+#define DEFAULT_GAME_PERIOD                                                    \
+	750000 // default time value in usec it takes for a piece to fall
 
 // playground size
 #define pg_max_x 8
@@ -32,12 +36,14 @@
 #define c_filler '.'
 #define c_empty ' '
 
+// game title in ascii art
 #define header_nb 3
 #define header_len 22
 #define header_0 "╔═╗╔═╗╦  ╦ ╦╔╦╗╔╗╔╔═╗"
 #define header_1 "║  ║ ║║  ║ ║║║║║║║╚═╗"
 #define header_2 "╚═╝╚═╝╩═╝╚═╝╩ ╩╝╚╝╚═╝"
 
+// control info
 #define control_nb 5
 #define control_len 15
 #define control_0 "z:      toggle"
@@ -45,7 +51,6 @@
 #define control_2 "d:  move right"
 #define control_3 "s: faster fall"
 #define control_4 "o:        quit"
-
 
 /////////////////////////////////////////////////////////////////////
 // global variables
@@ -63,7 +68,6 @@ wchar_t trio_next[3] = { 0 };
 static int max_x, max_y;
 static int score = 0, nb_pieces_erased = 0;
 static wchar_t *screen = NULL;
-
 
 /////////////////////////////////////////////////////////////////////
 // static functions
@@ -343,19 +347,25 @@ static int check_combo(wchar_t *pg)
 	return tmp_score;
 }
 
-
 /////////////////////////////////////////////////////////////////////
 // main function
 /////////////////////////////////////////////////////////////////////
 
 int main()
 {
-	int i, j, game_is_over = 0, exit = 0, fast_fall = 0;
+	int i, j; // counters for loops
+	int game_is_over = 0; // flag for game over
+	int exit = 0; // flag to quit loop
+	int fast_fall = 0; // flag for fast falling of pieces
+	int redraw; // flag to tell redrawing screen is needed
+	int clock = 0; // time elapsed since last game_cycle
+	int game_cycle =
+		DEFAULT_GAME_PERIOD; // period of time necessary for a piece to fall.
+	int level =
+		1; // difficulty of the game. higher it is, shorter is game cycle.
 	char coef_s[18];
 	wchar_t wstr[32];
 	wchar_t *next_wc[3];
-
-	int redraw, clock = 0, game_cycle = 700000;
 
 	// screen info
 	int screen_size, pg_size;
@@ -499,6 +509,18 @@ int main()
 				do {
 					tmp_score = check_combo(pg);
 					score += tmp_score * coeff_score;
+					// update level and game cycle accordingly
+					level = nb_pieces_erased /
+							PIECES_LEVEL_TRESHOLD +
+						1;
+					if (level >=
+					    DEFAULT_GAME_PERIOD / GTICK)
+						level = DEFAULT_GAME_PERIOD /
+								GTICK -
+							1;
+					game_cycle = DEFAULT_GAME_PERIOD -
+						     GTICK * level;
+
 					if (coeff_score > 1) {
 						snprintf(coef_s, 32,
 							 "COMBO X %d",
@@ -528,8 +550,8 @@ int main()
 			next_wc[i] = calloc(sizeof(wchar_t), 2);
 			next_wc[i][0] = trio_next[2 - i];
 		}
-		set_msg_box(max_x * 2 / 7, max_y * 2 / 5, 6, 3, "Next:", next_wc,
-			    3);
+		set_msg_box(max_x * 2 / 7, max_y * 2 / 5, 6, 3,
+			    "Next:", next_wc, 3);
 		// TODO: beware of the free
 		for (i = 0; i < 3; i++) {
 			free(next_wc[i]);
@@ -545,18 +567,22 @@ int main()
 		// game title
 		display_title(max_x / 2 - header_len / 2, max_y / 8);
 
+		// score
 		swprintf(wstr, 20, L"%d pts", score);
 		set_msg_box(max_x * 2 / 3, max_y * 2 / 6, 16, 1,
 			    "Score:", (wchar_t **)&wstr, 1);
 
+		// extra info about score (combo, sub-score)
 		swprintf(wstr, 20, L"%s", "TODO");
 		set_msg_box(max_x * 2 / 3, max_y * 3 / 6, 16, 1,
 			    "Info:", (wchar_t **)&wstr, 1);
 
-		swprintf(wstr, 20, L"%d", 1);
+		// level
+		swprintf(wstr, 20, L"%d", level);
 		set_msg_box(max_x * 2 / 3, max_y * 4 / 6, 16, 1,
 			    "Level:", (wchar_t **)&wstr, 1);
 
+		// score in pieces
 		swprintf(wstr, 20, L"%d", nb_pieces_erased);
 		set_msg_box(max_x * 2 / 3, max_y * 5 / 6, 16, 1,
 			    "Pieces:", (wchar_t **)&wstr, 1);
