@@ -331,7 +331,7 @@ static int check_combo(wchar_t *pg)
 		for (cpt = 0; cpt < 6; cpt++) {
 			put_pg_into_screen(cpt % 2 ? pg_copy : pg, screen,
 					   max_x / 2 - pg_max_x / 2,
-					   max_y * 1 / 2);
+					   max_y * 3 / 7);
 			mvaddwstr(0, 0, screen);
 			refresh();
 			usleep(100000);
