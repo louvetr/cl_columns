@@ -11,5 +11,9 @@ Move and toggle your columns so it makes lines of pieces.
 ### Required packets to install:
 - sudo apt install libncurses5-dev libncursesw5-dev
 
+### compilation
+execute './makefile' in source code directory.
+NB: that's not pretty, but I haven't found yet how to compile with standard 'makefile' code dealing with wchar_t and libncurses.
+
 ### screenshot:
 ![screenshot](https://raw.githubusercontent.com/louvetr/cl_columns/master/cl_columns_preview.png "Screenshot")
